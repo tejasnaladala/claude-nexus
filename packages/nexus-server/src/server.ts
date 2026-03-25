@@ -474,6 +474,59 @@ export class NexusServer {
 
     // Peer message — forward to target or broadcast
     this.messageRouter.onMessage("peer.message", (message) => {
+      // Handle special query messages from MCP tools
+      const payload = message.payload as any;
+      if (payload.content === "__nexus_query_status") {
+        const status = this.getStatus();
+        const agents = this.agentRegistry.getSummaries();
+        const response = this.createNexusMessage("peer.message", message.from, {
+          content: JSON.stringify({ type: "status_response", status, agents }),
+          messageType: "context_share",
+        }, message.id);
+        this.messageRouter.sendTo(message.from, response);
+        return;
+      }
+      if (payload.content === "__nexus_query_tasks") {
+        const filter = payload.filter || "all";
+        let tasks;
+        if (filter === "available") {
+          tasks = this.taskEngine.getAvailable();
+        } else if (filter === "mine") {
+          tasks = this.taskEngine.getByAgent(message.from);
+        } else {
+          tasks = this.taskEngine.getAll();
+        }
+        const taskSummaries = tasks.map(t => ({
+          taskId: t.taskId,
+          title: t.title,
+          status: t.status,
+          priority: t.priority,
+          assignedAgentId: t.assignedAgentId,
+          skillsRequired: t.skillsRequired,
+        }));
+        const response = this.createNexusMessage("peer.message", message.from, {
+          content: JSON.stringify({ type: "tasks_response", tasks: taskSummaries }),
+          messageType: "context_share",
+        }, message.id);
+        this.messageRouter.sendTo(message.from, response);
+        return;
+      }
+      if (payload.content === "__nexus_query_agents") {
+        const agents = this.agentRegistry.getAll().map(a => ({
+          agentId: a.agentId,
+          name: a.name,
+          status: a.status,
+          skills: a.skills,
+          activeTasks: a.activeTasks.length,
+          platform: a.platform,
+        }));
+        const response = this.createNexusMessage("peer.message", message.from, {
+          content: JSON.stringify({ type: "agents_response", agents }),
+          messageType: "context_share",
+        }, message.id);
+        this.messageRouter.sendTo(message.from, response);
+        return;
+      }
       this.messageRouter.sendToOrBroadcast(message, message.from);
     });
 
@@ -488,14 +541,18 @@ export class NexusServer {
     this.messageRouter.unregisterSocket(agentId);
 
     if (agent) {
-      // Reassign agent's tasks
+      // Only reassign if agent had active tasks
+      const hadTasks = agent.activeTasks.length > 0;
       for (const taskId of agent.activeTasks) {
         this.taskEngine.reassign(taskId, `Agent ${agent.name} disconnected`);
       }
 
-      // Notify remaining agents
+      // Notify remaining agents — only mention reassignment if there were tasks
+      const content = hadTasks
+        ? `Agent "${agent.name}" has left the nexus. ${agent.activeTasks.length} task(s) reassigned.`
+        : `Agent "${agent.name}" has left the nexus.`;
       const notification = this.createNexusMessage("peer.message", "broadcast", {
-        content: `Agent "${agent.name}" has left the nexus. Tasks reassigned.`,
+        content,
         messageType: "chat",
       } satisfies PeerMessagePayload);
       this.messageRouter.broadcast(notification);

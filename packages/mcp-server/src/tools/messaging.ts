@@ -1,4 +1,5 @@
 import type { AgentRuntime } from "@claude-nexus/agent-runtime";
+import { queryNexus } from "./status.js";
 
 export function createSendMessageTool(runtime: AgentRuntime) {
   return {
@@ -22,8 +23,8 @@ export function createSendMessageTool(runtime: AgentRuntime) {
         content: [{
           type: "text" as const,
           text: sent
-            ? `Message sent to ${args.to || "all agents"}.`
-            : "Failed to send message — not connected to nexus.",
+            ? `✅ Message sent to ${args.to || "all agents"}.`
+            : "❌ Failed to send message — not connected to nexus.",
         }],
       };
     },
@@ -39,17 +40,40 @@ export function createListAgentsTool(runtime: AgentRuntime) {
       properties: {},
     },
     handler: async () => {
-      // We'd need to query the nexus for this — for now emit a request
-      runtime.sendMessage("peer.message", "nexus", {
-        content: "list_agents_request",
-        messageType: "chat",
-      });
-      return {
-        content: [{
-          type: "text" as const,
-          text: `Agent listing requested. This agent ID: ${runtime.getAgentId() || "not connected"}.`,
-        }],
-      };
+      const raw = await queryNexus(runtime, "__nexus_query_agents");
+
+      try {
+        const data = JSON.parse(raw);
+        const agents = data.agents || [];
+        const myId = runtime.getAgentId();
+
+        if (agents.length === 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "No agents connected to the nexus.",
+            }],
+          };
+        }
+
+        let text = `👥 Connected Agents (${agents.length}):\n\n`;
+        for (const a of agents) {
+          const isMe = a.agentId === myId ? " ← YOU" : "";
+          text += `• ${a.name}${isMe}\n`;
+          text += `  ID: ${a.agentId}\n`;
+          text += `  Status: ${a.status} | Platform: ${a.platform} | Active tasks: ${a.activeTasks}\n`;
+          text += `  Skills: ${a.skills.join(", ")}\n\n`;
+        }
+
+        return { content: [{ type: "text" as const, text }] };
+      } catch {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Failed to parse agent list. Raw: " + raw,
+          }],
+        };
+      }
     },
   };
 }

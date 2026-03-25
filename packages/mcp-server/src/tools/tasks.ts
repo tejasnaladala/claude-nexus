@@ -1,4 +1,5 @@
 import type { AgentRuntime } from "@claude-nexus/agent-runtime";
+import { queryNexus } from "./status.js";
 
 export function createSubmitTaskTool(runtime: AgentRuntime) {
   return {
@@ -28,8 +29,8 @@ export function createSubmitTaskTool(runtime: AgentRuntime) {
         content: [{
           type: "text" as const,
           text: sent
-            ? `Task submitted: "${args.title}". The nexus will auto-assign it to the best available agent.`
-            : "Failed to submit task — not connected to nexus.",
+            ? `✅ Task submitted: "${args.title}". The nexus will auto-assign it to the best available agent based on skill match.`
+            : "❌ Failed to submit task — not connected to nexus.",
         }],
       };
     },
@@ -58,8 +59,8 @@ export function createClaimTaskTool(runtime: AgentRuntime) {
         content: [{
           type: "text" as const,
           text: sent
-            ? `Task ${args.task_id} claimed. You are now working on it.`
-            : "Failed to claim task — not connected to nexus.",
+            ? `✅ Task ${args.task_id} claimed. You are now working on it.`
+            : "❌ Failed to claim task — not connected to nexus.",
         }],
       };
     },
@@ -93,8 +94,8 @@ export function createSubmitResultTool(runtime: AgentRuntime) {
         content: [{
           type: "text" as const,
           text: sent
-            ? `Result submitted for task ${args.task_id}. ${args.confidence && args.confidence < 0.8 ? "Low confidence — debate may be triggered." : "Awaiting approval."}`
-            : "Failed to submit result — not connected to nexus.",
+            ? `✅ Result submitted for task ${args.task_id}. ${args.confidence && args.confidence < 0.8 ? "⚠️ Low confidence — debate may be triggered." : "Awaiting approval."}`
+            : "❌ Failed to submit result — not connected to nexus.",
         }],
       };
     },
@@ -104,21 +105,47 @@ export function createSubmitResultTool(runtime: AgentRuntime) {
 export function createGetTaskQueueTool(runtime: AgentRuntime) {
   return {
     name: "nexus_get_task_queue",
-    description: "View all tasks and their current status",
+    description: "View all tasks and their current status. Use filter 'mine' to see only your tasks, 'available' for unclaimed tasks, or 'all' for everything.",
     inputSchema: {
       type: "object" as const,
       properties: {
         filter: { type: "string", enum: ["all", "available", "mine", "in_review"], description: "Filter tasks" },
       },
     },
-    handler: async (_args: { filter?: string }) => {
-      // This queries via the nexus — for now return a prompt to the agent
-      return {
-        content: [{
-          type: "text" as const,
-          text: "Task queue query sent to nexus. Active tasks on this agent: " + JSON.stringify(runtime.getActiveTasks()),
-        }],
-      };
+    handler: async (args: { filter?: string }) => {
+      const filter = args.filter || "all";
+      const raw = await queryNexus(runtime, "__nexus_query_tasks", { filter });
+
+      try {
+        const data = JSON.parse(raw);
+        const tasks = data.tasks || [];
+
+        if (tasks.length === 0) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `📋 No tasks found (filter: ${filter}). Submit a task with nexus_submit_task.`,
+            }],
+          };
+        }
+
+        let text = `📋 Task Queue (filter: ${filter}) — ${tasks.length} task(s):\n\n`;
+        for (const t of tasks) {
+          const assigned = t.assignedAgentId ? `→ ${t.assignedAgentId}` : "unassigned";
+          text += `• [${t.status.toUpperCase()}] ${t.title}\n`;
+          text += `  ID: ${t.taskId}\n`;
+          text += `  Priority: ${t.priority} | Skills: ${(t.skillsRequired || []).join(", ") || "any"} | ${assigned}\n\n`;
+        }
+
+        return { content: [{ type: "text" as const, text }] };
+      } catch {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Failed to parse task queue response. Raw: " + raw,
+          }],
+        };
+      }
     },
   };
 }
