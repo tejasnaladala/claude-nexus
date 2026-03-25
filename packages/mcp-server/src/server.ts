@@ -3,12 +3,16 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentRuntime } from "@claude-nexus/agent-runtime";
 import * as tools from "./tools/index.js";
+import { MessageInbox } from "./inbox.js";
 
 export function createNexusMcpServer(runtime: AgentRuntime) {
   const server = new Server(
     { name: "claude-nexus", version: "0.1.0" },
     { capabilities: { tools: {} } },
   );
+
+  // Create message inbox to capture incoming messages
+  const inbox = new MessageInbox(runtime);
 
   // Collect all tool definitions
   const allTools = [
@@ -23,6 +27,7 @@ export function createNexusMcpServer(runtime: AgentRuntime) {
     tools.createWriteMemoryTool(runtime),
     tools.createRequestDebateTool(runtime),
     tools.createExecuteRemoteTool(runtime),
+    tools.createReadInboxTool(inbox),
   ];
 
   const toolMap = new Map(allTools.map((t) => [t.name, t]));
