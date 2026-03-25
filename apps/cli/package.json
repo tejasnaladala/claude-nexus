@@ -1,0 +1,32 @@
+{
+  "name": "claude-nexus",
+  "version": "0.1.0",
+  "description": "CLI for Claude Nexus multi-agent coordination system",
+  "main": "./dist/index.js",
+  "bin": {
+    "nexus": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "lint": "tsc --noEmit",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@claude-nexus/core": "*",
+    "@claude-nexus/protocol": "*",
+    "@claude-nexus/nexus-server": "*",
+    "@claude-nexus/agent-runtime": "*",
+    "@claude-nexus/mcp-server": "*",
+    "commander": "^13.0.0",
+    "yaml": "^2.7.0",
+    "chalk": "^5.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "vitest": "^3.0.0",
+    "tsx": "^4.19.0"
+  }
+}

@@ -1,0 +1,43 @@
+# Claude Nexus Configuration Example
+# Copy to ./nexus.yaml and customize
+
+agent:
+  name: "my-agent"
+  skills:
+    - typescript
+    - react
+    - testing
+  maxConcurrentTasks: 2
+
+nexus:
+  port: 7377
+  host: "0.0.0.0"
+  mode: "auto"
+  joinUrl: ""
+
+tunnel:
+  enabled: true
+  provider: "bore"
+  boreServer: "bore.pub"
+
+execution:
+  allowlist:
+    - npm
+    - node
+    - git
+    - python3
+  denylist:
+    - "rm -rf"
+    - sudo
+  timeoutMs: 60000
+
+memory:
+  dbPath: "./nexus-data/memory.db"
+  maxEntriesPerScope: 10000
+  syncIntervalMs: 5000
+
+debate:
+  maxRounds: 3
+  timeoutPerRoundMs: 60000
+  consensusThreshold: 0.7
+  autoReviewThreshold: 0.8

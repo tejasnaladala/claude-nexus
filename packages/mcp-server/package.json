@@ -1,0 +1,35 @@
+{
+  "name": "@claude-nexus/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server exposing Claude Nexus tools to Claude Code",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "nexus-mcp": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@claude-nexus/core": "*",
+    "@claude-nexus/protocol": "*",
+    "@claude-nexus/agent-runtime": "*",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "vitest": "^3.0.0"
+  }
+}

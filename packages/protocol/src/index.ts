@@ -1,0 +1,41 @@
+export {
+  PlatformSchema,
+  AgentRegisterSchema,
+  AgentRegisteredSchema,
+  HeartbeatSchema,
+  type AgentRegisterInput,
+  type AgentRegisteredInput,
+  type HeartbeatInput,
+  TaskPrioritySchema,
+  ArtifactSchema,
+  TaskSubmitSchema,
+  TaskAssignedSchema,
+  TaskResultSchema,
+  TaskClaimedSchema,
+  type TaskSubmitInput,
+  type TaskResultInput,
+  DebateInitiateSchema,
+  DebateArgumentSchema,
+  DebateVerdictSchema,
+  type DebateInitiateInput,
+  type DebateArgumentInput,
+  MemoryScopeSchema,
+  MemoryWriteSchema,
+  MemoryReadSchema,
+  MemoryEntrySchema,
+  MemorySnapshotSchema,
+  type MemoryWriteInput,
+  type MemoryReadInput,
+  ExecRequestSchema,
+  ExecResultSchema,
+  type ExecRequestInput,
+  type ExecResultInput,
+} from "./schemas/index.js";
+
+export { encodeMessage, decodeMessage, createMessage } from "./serialization.js";
+
+export {
+  validatePayload,
+  validateMessage,
+  type ValidationResult,
+} from "./validation.js";
