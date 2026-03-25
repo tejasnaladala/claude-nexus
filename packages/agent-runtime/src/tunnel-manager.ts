@@ -35,7 +35,7 @@ export class TunnelManager {
       const child = execFile(
         "npx",
         ["localtunnel", "--port", String(localPort)],
-        { timeout: 30000 },
+        { timeout: 30000, shell: true },
       );
 
       let output = "";
