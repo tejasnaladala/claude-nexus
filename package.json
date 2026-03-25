@@ -4,6 +4,19 @@
   "private": true,
   "description": "Multi-agent coordination system for Claude Code instances",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tejasnaladala/claude-nexus.git"
+  },
+  "homepage": "https://github.com/tejasnaladala/claude-nexus",
+  "keywords": [
+    "claude-code",
+    "multi-agent",
+    "mcp",
+    "coordination",
+    "collaboration",
+    "ai-agents"
+  ],
   "workspaces": [
     "packages/*",
     "apps/*"
