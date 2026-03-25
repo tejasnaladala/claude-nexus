@@ -6,3 +6,6 @@ export { DebateEngine } from "./debate-engine.js";
 export { MemoryStore } from "./memory-store.js";
 export { MessageRouter } from "./message-router.js";
 export type { MessageHandler } from "./message-router.js";
+export { InviteManager } from "./invite.js";
+export type { InviteCode } from "./invite.js";
+export { findFreePort } from "./auto-port.js";

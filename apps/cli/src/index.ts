@@ -6,6 +6,8 @@ import { joinCommand } from "./commands/join.js";
 import { statusCommand } from "./commands/status.js";
 import { mcpCommand } from "./commands/mcp.js";
 import { configCommand } from "./commands/config.js";
+import { setupCommand } from "./commands/setup.js";
+import { uninstallCommand } from "./commands/uninstall.js";
 
 const program = new Command();
 
@@ -27,11 +29,12 @@ program
   .action(startCommand);
 
 program
-  .command("join <url>")
+  .command("join [url]")
   .description("Join an existing nexus")
   .option("-n, --name <name>", "Agent name", "agent")
   .option("-s, --skills <skills>", "Comma-separated skills", "general")
   .option("--max-tasks <n>", "Max concurrent tasks", "2")
+  .option("-i, --invite <code>", "Join using an invite code")
   .action(joinCommand);
 
 program
@@ -52,5 +55,18 @@ program
   .description("Manage configuration")
   .option("--init", "Create example config file")
   .action(configCommand);
+
+program
+  .command("setup")
+  .description("One-click MCP server installation into Claude Code")
+  .option("-u, --nexus-url <url>", "Nexus URL to connect to")
+  .option("-n, --name <name>", "Agent name", "claude-code-agent")
+  .option("-s, --skills <skills>", "Comma-separated skills", "general")
+  .action(setupCommand);
+
+program
+  .command("uninstall")
+  .description("Remove nexus MCP server from Claude Code")
+  .action(uninstallCommand);
 
 program.parse();

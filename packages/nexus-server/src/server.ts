@@ -22,6 +22,8 @@ import { TaskEngine } from "./task-engine.js";
 import { DebateEngine } from "./debate-engine.js";
 import { MemoryStore } from "./memory-store.js";
 import { MessageRouter } from "./message-router.js";
+import { InviteManager } from "./invite.js";
+import { findFreePort } from "./auto-port.js";
 
 export interface NexusServerConfig {
   port: number;
@@ -39,8 +41,10 @@ export class NexusServer {
   readonly debateEngine: DebateEngine;
   readonly memoryStore: MemoryStore;
   readonly messageRouter: MessageRouter;
+  readonly inviteManager: InviteManager;
 
   private readonly config: NexusServerConfig;
+  private readonly silentAgents = new Set<string>();
 
   constructor(config: Partial<NexusServerConfig> = {}) {
     this.config = {
@@ -54,14 +58,21 @@ export class NexusServer {
     this.taskEngine = new TaskEngine(this.agentRegistry, this.memoryStore);
     this.debateEngine = new DebateEngine(this.memoryStore);
     this.messageRouter = new MessageRouter();
+    this.inviteManager = new InviteManager();
 
     this.registerHandlers();
   }
 
   async start(): Promise<{ port: number; url: string }> {
+    // Auto-find a free port when port is 0
+    const port =
+      this.config.port === 0
+        ? await findFreePort()
+        : this.config.port;
+
     return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({
-        port: this.config.port,
+        port,
         host: this.config.host,
       });
 
@@ -171,8 +182,14 @@ export class NexusServer {
     // Agent registration
     this.messageRouter.onMessage("agent.register", (message, ws) => {
       const payload = message.payload as unknown as AgentRegisterPayload;
+      const isSilent = (message.payload as any).silent === true;
       const record = this.agentRegistry.register(payload);
       const agentId = record.agentId;
+
+      // Track silent flag on the agent record for disconnect handling
+      if (isSilent) {
+        this.silentAgents.add(agentId);
+      }
 
       this.messageRouter.registerSocket(agentId, ws);
 
@@ -190,15 +207,17 @@ export class NexusServer {
 
       ws.send(JSON.stringify(response));
 
-      // Notify other agents
-      const notification = this.createNexusMessage("peer.message", "broadcast", {
-        content: `Agent "${record.name}" has joined the nexus.`,
-        messageType: "chat",
-      } satisfies PeerMessagePayload);
-      this.messageRouter.broadcast(notification, agentId);
+      // Only broadcast join notification for non-silent agents
+      if (!isSilent) {
+        const notification = this.createNexusMessage("peer.message", "broadcast", {
+          content: `Agent "${record.name}" has joined the nexus.`,
+          messageType: "chat",
+        } satisfies PeerMessagePayload);
+        this.messageRouter.broadcast(notification, agentId);
+      }
 
       console.log(
-        `[Nexus] Agent registered: ${record.name} (${agentId}) with skills: ${record.skills.join(", ")}`,
+        `[Nexus] Agent registered: ${record.name} (${agentId})${isSilent ? " [silent]" : ""} with skills: ${record.skills.join(", ")}`,
       );
     });
 
@@ -511,6 +530,19 @@ export class NexusServer {
         this.messageRouter.sendTo(message.from, response);
         return;
       }
+      if (payload.content === "__nexus_query_inbox") {
+        const messages = this.memoryStore.getUnreadMessages(message.from, 50);
+        // Mark as read
+        for (const msg of messages) {
+          this.memoryStore.markMessageRead(msg.messageId, message.from);
+        }
+        const response = this.createNexusMessage("peer.message", message.from, {
+          content: JSON.stringify({ type: "inbox_response", messages }),
+          messageType: "context_share",
+        }, message.id);
+        this.messageRouter.sendTo(message.from, response);
+        return;
+      }
       if (payload.content === "__nexus_query_agents") {
         const agents = this.agentRegistry.getAll().map(a => ({
           agentId: a.agentId,
@@ -527,6 +559,17 @@ export class NexusServer {
         this.messageRouter.sendTo(message.from, response);
         return;
       }
+      // Persist message for offline delivery
+      if (payload.messageType !== "context_share" || !payload.content?.startsWith("__nexus_query")) {
+        this.memoryStore.saveMessage(
+          message.id,
+          message.from,
+          message.to,
+          payload.content || "",
+          payload.messageType || "chat",
+        );
+      }
+
       this.messageRouter.sendToOrBroadcast(message, message.from);
     });
 
@@ -539,6 +582,7 @@ export class NexusServer {
   private handleDisconnect(agentId: string): void {
     const agent = this.agentRegistry.deregister(agentId);
     this.messageRouter.unregisterSocket(agentId);
+    const wasSilent = this.silentAgents.delete(agentId);
 
     if (agent) {
       // Only reassign if agent had active tasks
@@ -547,15 +591,17 @@ export class NexusServer {
         this.taskEngine.reassign(taskId, `Agent ${agent.name} disconnected`);
       }
 
-      // Notify remaining agents — only mention reassignment if there were tasks
-      const content = hadTasks
-        ? `Agent "${agent.name}" has left the nexus. ${agent.activeTasks.length} task(s) reassigned.`
-        : `Agent "${agent.name}" has left the nexus.`;
-      const notification = this.createNexusMessage("peer.message", "broadcast", {
-        content,
-        messageType: "chat",
-      } satisfies PeerMessagePayload);
-      this.messageRouter.broadcast(notification);
+      // Silent agents don't broadcast disconnect notifications
+      if (!wasSilent) {
+        const content = hadTasks
+          ? `Agent "${agent.name}" has left the nexus. ${agent.activeTasks.length} task(s) reassigned.`
+          : `Agent "${agent.name}" has left the nexus.`;
+        const notification = this.createNexusMessage("peer.message", "broadcast", {
+          content,
+          messageType: "chat",
+        } satisfies PeerMessagePayload);
+        this.messageRouter.broadcast(notification);
+      }
     }
   }
 

@@ -1,6 +1,7 @@
 import { NexusServer } from "@claude-nexus/nexus-server";
-import { AgentRuntime } from "@claude-nexus/agent-runtime";
+import { AgentRuntime, TunnelManager } from "@claude-nexus/agent-runtime";
 import { DEFAULT_PORT, DEFAULT_EXECUTION_ALLOWLIST } from "@claude-nexus/core";
+import { encodeInvite } from "./join.js";
 
 interface StartOptions {
   name: string;
@@ -63,9 +64,41 @@ export async function startCommand(options: StartOptions): Promise<void> {
     console.log(`\n📡 Other agents can join with:`);
     console.log(`   nexus join ws://<your-ip>:${port}\n`);
 
+    // Start tunnel for internet access
+    let tunnelMgr: TunnelManager | null = null;
+    if (options.tunnel !== false) {
+      try {
+        tunnelMgr = new TunnelManager();
+        console.log("🌐 Starting tunnel for internet access...");
+        const tunnel = await tunnelMgr.startTunnel(port);
+        console.log(`✅ Tunnel active: ${tunnel.publicUrl}`);
+
+        // Generate invite — base64url-encoded URL (self-contained, no central lookup needed)
+        server.inviteManager.create(tunnel.publicUrl, {
+          expiresInHours: 24,
+        });
+        const invite = encodeInvite(tunnel.publicUrl);
+        console.log(`\n🎟️  Invite code: ${invite}`);
+        console.log(
+          `   Others join with: nexus join --invite ${invite}`,
+        );
+        console.log(`   Or directly: nexus join ${tunnel.publicUrl}`);
+      } catch (e) {
+        console.log(
+          "⚠️  Tunnel failed. LAN-only mode. Others need your IP to connect.",
+        );
+        if (e instanceof Error) {
+          console.log(`   Reason: ${e.message}`);
+        }
+      }
+    }
+
     // Handle graceful shutdown
     const shutdown = async () => {
       console.log("\n🛑 Shutting down...");
+      if (tunnelMgr) {
+        await tunnelMgr.stopTunnel();
+      }
       await runtime.stop();
       await server.stop();
       process.exit(0);

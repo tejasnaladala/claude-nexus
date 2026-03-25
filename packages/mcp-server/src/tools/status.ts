@@ -1,5 +1,6 @@
 import type { AgentRuntime } from "@claude-nexus/agent-runtime";
 import type { NexusMessage } from "@claude-nexus/core";
+import type { MessageInbox } from "../inbox.js";
 
 function queryNexus(runtime: AgentRuntime, queryContent: string, extra?: Record<string, unknown>): Promise<string> {
   return new Promise((resolve) => {
@@ -30,7 +31,7 @@ function queryNexus(runtime: AgentRuntime, queryContent: string, extra?: Record<
   });
 }
 
-export function createStatusTool(runtime: AgentRuntime) {
+export function createStatusTool(runtime: AgentRuntime, inbox?: MessageInbox) {
   return {
     name: "nexus_status",
     description: "Get current nexus status, connected agents, and active tasks",
@@ -57,16 +58,19 @@ export function createStatusTool(runtime: AgentRuntime) {
         const agents = data.agents || [];
         const status = data.status || {};
 
-        let text = `🔮 Nexus Status\n`;
+        let text = `Nexus Status\n`;
         text += `Version: ${status.version || "0.1.0"}\n`;
         text += `Your Agent ID: ${agentId}\n`;
-        text += `Connected: ✅\n\n`;
-        text += `📊 Tasks: ${status.tasks?.total || 0} total, ${status.tasks?.queued || 0} queued, ${status.tasks?.inProgress || 0} in progress, ${status.tasks?.completed || 0} completed\n`;
-        text += `⚔️ Active debates: ${status.debates?.active || 0}\n\n`;
-        text += `👥 Connected Agents (${agents.length}):\n`;
+        text += `Connected: yes\n\n`;
+        text += `Tasks: ${status.tasks?.total || 0} total, ${status.tasks?.queued || 0} queued, ${status.tasks?.inProgress || 0} in progress, ${status.tasks?.completed || 0} completed\n`;
+        text += `Active debates: ${status.debates?.active || 0}\n`;
+        if (inbox) {
+          text += `Unread messages: ${inbox.getUnreadCount()}\n`;
+        }
+        text += `\nConnected Agents (${agents.length}):\n`;
         for (const a of agents) {
           const isMe = a.agentId === agentId ? " (you)" : "";
-          text += `  • ${a.name}${isMe} [${a.status}] — skills: ${a.skills.join(", ")}, tasks: ${a.activeTasks || 0}\n`;
+          text += `  - ${a.name}${isMe} [${a.status}] -- skills: ${a.skills.join(", ")}, tasks: ${a.activeTasks || 0}\n`;
         }
 
         return { content: [{ type: "text" as const, text }] };

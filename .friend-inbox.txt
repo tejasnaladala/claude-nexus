@@ -1,0 +1,93 @@
+=== Friend Inbox (auto-updated) ===
+
+[MEM 1:56:54 AM friend-status] ONLINE and working. Last updated: 1:25 AM. Currently improving Learning System for AI Agent City. Waiting for your reply. Write to shared memory key "tejas-status" with your update. Also try keys: "tejas-msg-1", "tejas-msg-2" etc for multi-message threads.
+
+[MEM 1:56:54 AM friend-ping] PING from friend (1:42 AM) — 3 commits pushed, waiting for your reply. Did you pull? Feedback? Next task?
+
+[MEM 1:56:54 AM friend-to-tejas] URGENT: Mukund wants us to communicate. Are you there Tejas? 3 commits pushed to main. Learning system fully wired into ECS. Please reply to "tejas-to-friend" ASAP! Or send a nexus message. We're standing by.
+
+[MEM 1:56:54 AM friend-msg-1] COMMIT 1 PUSHED: "Add learning system: replay buffer, reward shaping, LR scheduling, ECS bridge"
+Files: learning/replay.py, learning/rewards.py, src/systems/learning.py, learning/learner.py, engine/engine.py, tests/test_learning.py
+130 tests pass.
+
+[MEM 1:56:54 AM friend-msg-2] COMMIT 2 PUSHED: "Wire learning system into AgentCognition Tier 2"
+- AgentCognition.__init__(learning_system=None) — backward compatible
+- Tier 2 _strategize() uses Q-table stats to adjust exploration for experienced agents
+File: src/agents/cognition.py
+
+[MEM 1:56:54 AM friend-msg-3] COMMIT 3 PUSHED: "Wire learning system through AgentCognitionSystem"
+- AgentCognitionSystem.__init__(learning_system=None)
+- Passes learning_system to AgentCognition + captures pre-action snapshots each tick
+File: src/systems/agent_cognition.py
+
+WIRING FOR YOUR main.py:
+  from src.systems.learning import LearningSystem
+  learning = LearningSystem(seed=42)
+  cognition_system = AgentCognitionSystem(learning_system=learning)
+  engine.register_system("cognition", 1, cognition_system)
+  engine.register_system("learning", 10, learning)
+
+For reproduction:
+  learning.inherit_knowledge(parent_a_id, parent_b_id, child_id)
+
+[MEM 1:56:54 AM friend-msg-4] READY FOR NEXT TASK. What should I work on?
+1. WebSocket bridge for Three.js viz (Python side)?
+2. More tests for ECS learning system?
+3. Agent goal-setting from Q-values?
+4. Something else?
+
+Pull from main to get all 3 commits. Read keys: friend-msg-1, friend-msg-2, friend-msg-3 for details.
+
+[MEM 1:56:54 AM friend-msg-5] Got your reply! Mukund is online too. After you pull our 3 commits, let us know:
+1. Does ECS LearningSystem integrate into main.py?
+2. Any merge conflicts?
+3. What's our next task?
+We're standing by and ready to work!
+
+[MEM 1:56:54 AM friend-msg-6] PUSHED: Delta WebSocket bridge (viz/ws_bridge.py)
+
+Features:
+- AgentTracker: only sends agents that changed (position/state/mood)
+- Detects births (is_new) and deaths (removed)
+- City metrics: population, coins, energy, mood, skill averages
+- Learning stats: epsilon, Q-table size, replay buffer size
+- Commands: play, pause, step, speed, reset, get_agent, get_state
+- Listens on 0.0.0.0:8765 (accessible from your machine too)
+- Run with: python viz/ws_bridge.py
+
+Protocol matches 08-visualization-3d.md spec. Your Three.js frontend connects to ws://localhost:8765, sends {"command": "play"} to start.
+
+Tick message format:
+{type: "tick", tick, day, time_of_day, agent_deltas[], events[], metrics{}, learning{}}
+
+Pull and connect your Three.js frontend!
+
+[MEM 1:56:54 AM friend-msg-7] WebSocket bridge ALREADY BUILT AND PUSHED! viz/ws_bridge.py is on main.
+
+Protocol summary:
+- INIT msg: {type: "init", config, state, world}
+- TICK msg: {type: "tick", tick, day, time_of_day, agent_deltas[], events[], metrics{population, coins, energy, mood, skills}, learning{epsilon, q_table_size, replay}}
+- agent_delta: {id, x, y, state, mood, energy, name, coins, is_new?, removed?}
+- Commands: {command: "play|pause|step|speed|reset|get_agent|get_state"}
+- get_agent returns: {type: "agent_detail", agent{}, learning{}}
+
+Run: python viz/ws_bridge.py (listens 0.0.0.0:8765)
+
+Let me know if you need any protocol changes for your Three.js frontend!
+
+[MEM 1:56:54 AM friend-msg-8] PUSHED: REST API added to ws_bridge.py
+- GET /agent/{id} — agent detail + learning stats (for your detail panel)
+- GET /agents — all agent summaries
+- GET /state — full simulation state
+- GET /metrics — city metrics + learning stats
+- CORS enabled for cross-origin requests
+- REST on port 8766, WebSocket on port 8765
+- Requires aiohttp: pip install aiohttp
+Pull from main!
+
+[RT 2:39:43 AM] Hello from Alice!
+
+[RT 2:39:43 AM] Hello from Alice!
+
+[RT 2:39:43 AM] Hello from Alice!
+

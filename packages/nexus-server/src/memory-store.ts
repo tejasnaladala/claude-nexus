@@ -27,6 +27,19 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
+  CREATE TABLE IF NOT EXISTS messages (
+    message_id TEXT PRIMARY KEY,
+    from_agent TEXT NOT NULL,
+    to_agent TEXT NOT NULL,
+    content TEXT NOT NULL,
+    message_type TEXT NOT NULL DEFAULT 'chat',
+    created_at INTEGER NOT NULL,
+    read_by TEXT NOT NULL DEFAULT '[]'
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent);
+  CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+
   CREATE TABLE IF NOT EXISTS debates (
     debate_id TEXT PRIMARY KEY,
     data TEXT NOT NULL,
@@ -245,6 +258,76 @@ export class MemoryStore {
       .prepare("SELECT data FROM debates WHERE debate_id = ?")
       .get(debateId) as { data: string } | undefined;
     return row ? JSON.parse(row.data) : null;
+  }
+
+  // Message persistence — messages survive reconnects
+  saveMessage(
+    messageId: string,
+    fromAgent: string,
+    toAgent: string,
+    content: string,
+    messageType: string,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO messages (message_id, from_agent, to_agent, content, message_type, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(messageId, fromAgent, toAgent, content, messageType, Date.now());
+  }
+
+  getUnreadMessages(agentId: string, limit: number = 50): Array<{
+    messageId: string;
+    fromAgent: string;
+    content: string;
+    messageType: string;
+    createdAt: number;
+  }> {
+    const rows = this.db
+      .prepare(
+        `SELECT message_id, from_agent, content, message_type, created_at
+         FROM messages
+         WHERE (to_agent = ? OR to_agent = 'broadcast')
+         AND read_by NOT LIKE ?
+         ORDER BY created_at DESC
+         LIMIT ?`,
+      )
+      .all(agentId, `%"${agentId}"%`, limit) as Array<{
+        message_id: string;
+        from_agent: string;
+        content: string;
+        message_type: string;
+        created_at: number;
+      }>;
+
+    return rows.map((r) => ({
+      messageId: r.message_id,
+      fromAgent: r.from_agent,
+      content: r.content,
+      messageType: r.message_type,
+      createdAt: r.created_at,
+    }));
+  }
+
+  markMessageRead(messageId: string, agentId: string): void {
+    const row = this.db
+      .prepare("SELECT read_by FROM messages WHERE message_id = ?")
+      .get(messageId) as { read_by: string } | undefined;
+
+    if (row) {
+      const readBy: string[] = JSON.parse(row.read_by);
+      if (!readBy.includes(agentId)) {
+        readBy.push(agentId);
+        this.db
+          .prepare("UPDATE messages SET read_by = ? WHERE message_id = ?")
+          .run(JSON.stringify(readBy), messageId);
+      }
+    }
+  }
+
+  pruneOldMessages(maxAgeDays: number = 7): void {
+    const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+    this.db.prepare("DELETE FROM messages WHERE created_at < ?").run(cutoff);
   }
 
   close(): void {
