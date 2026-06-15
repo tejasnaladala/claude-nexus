@@ -50,12 +50,16 @@ export class ExecutionProxy {
       return false;
     }
 
-    return this.allowlist.some(
-      (allowed) =>
-        firstWord === allowed ||
-        firstWord.endsWith(`/${allowed}`) ||
-        firstWord.endsWith(`\\${allowed}`),
-    );
+    // Normalize the executable to its basename so an absolute or relative path
+    // (e.g. "/usr/local/bin/node" or "C:\\tools\\nodejs\\node.exe") is matched
+    // by the bare binary name. Strip a single trailing Windows executable
+    // extension (.exe/.cmd/.bat) so "node.exe" matches the "node" allowlist
+    // entry. Matching stays exact against the allowlist after normalization, so
+    // the security check is not weakened — only the intended binaries pass.
+    const basename = firstWord.split(/[/\\]/).pop() ?? firstWord;
+    const normalized = basename.replace(/\.(?:exe|cmd|bat)$/i, "");
+
+    return this.allowlist.some((allowed) => normalized === allowed);
   }
 
   async execute(
