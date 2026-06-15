@@ -250,6 +250,8 @@ export class AgentRuntime extends EventEmitter {
     const result = await this.executionProxy.execute(
       payload.command as string,
       {
+        requestId: message.id,
+        agentId: this.agentId ?? "",
         workingDirectory: payload.workingDirectory as string | undefined,
         env: payload.env as Record<string, string> | undefined,
         timeoutMs: payload.timeoutMs as number | undefined,
@@ -261,7 +263,6 @@ export class AgentRuntime extends EventEmitter {
       "nexus",
       {
         ...result,
-        requestId: message.id,
         requestingAgentId: payload.requestingAgentId,
       },
       message.id,
