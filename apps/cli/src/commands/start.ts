@@ -17,6 +17,12 @@ export async function startCommand(options: StartOptions): Promise<void> {
   const port = parseInt(options.port, 10) || DEFAULT_PORT;
   const skills = options.skills.split(",").map((s) => s.trim());
   const maxTasks = parseInt(options.maxTasks, 10) || 2;
+  const authToken = process.env.NEXUS_SHARED_TOKEN;
+  if (!authToken) {
+    throw new Error(
+      "NEXUS_SHARED_TOKEN is required and must be shared out of band with joining agents.",
+    );
+  }
 
   console.log(`\n🔮 Claude Nexus v0.1.0\n`);
   console.log(`Starting nexus server...`);
@@ -26,17 +32,19 @@ export async function startCommand(options: StartOptions): Promise<void> {
     port,
     host: options.host,
     dbPath: options.dbPath,
+    authToken,
   });
 
   try {
-    const { url } = await server.start();
+    const { port: actualPort, url } = await server.start();
     console.log(`✅ Nexus server listening on ${url}`);
 
     // Start the local agent runtime and connect to self
     const runtime = new AgentRuntime({
       name: options.name,
       skills,
-      nexusUrl: `ws://127.0.0.1:${port}`,
+      nexusUrl: `ws://127.0.0.1:${actualPort}`,
+      authToken,
       port: port + 1,
       maxConcurrentTasks: maxTasks,
       executionAllowlist: [...DEFAULT_EXECUTION_ALLOWLIST],
@@ -58,19 +66,27 @@ export async function startCommand(options: StartOptions): Promise<void> {
     });
 
     const registration = await runtime.start();
-    console.log(`✅ Agent "${options.name}" registered (${registration.agentId})`);
+    console.log(
+      `✅ Agent "${options.name}" registered (${registration.agentId})`,
+    );
     console.log(`   Skills: ${skills.join(", ")}`);
     console.log(`   Max concurrent tasks: ${maxTasks}`);
-    console.log(`\n📡 Other agents can join with:`);
-    console.log(`   nexus join ws://<your-ip>:${port}\n`);
+    if (options.host === "127.0.0.1" || options.host === "localhost") {
+      console.log(
+        `\n🔒 Loopback-only mode. Use --host 0.0.0.0 explicitly to accept LAN peers.\n`,
+      );
+    } else {
+      console.log(`\n📡 Other agents can join with:`);
+      console.log(`   nexus join ws://<your-ip>:${actualPort}\n`);
+    }
 
     // Start tunnel for internet access
     let tunnelMgr: TunnelManager | null = null;
-    if (options.tunnel !== false) {
+    if (options.tunnel) {
       try {
         tunnelMgr = new TunnelManager();
         console.log("🌐 Starting tunnel for internet access...");
-        const tunnel = await tunnelMgr.startTunnel(port);
+        const tunnel = await tunnelMgr.startTunnel(actualPort);
         console.log(`✅ Tunnel active: ${tunnel.publicUrl}`);
 
         // Generate invite — base64url-encoded URL (self-contained, no central lookup needed)
@@ -79,9 +95,7 @@ export async function startCommand(options: StartOptions): Promise<void> {
         });
         const invite = encodeInvite(tunnel.publicUrl);
         console.log(`\n🎟️  Invite code: ${invite}`);
-        console.log(
-          `   Others join with: nexus join --invite ${invite}`,
-        );
+        console.log(`   Others join with: nexus join --invite ${invite}`);
         console.log(`   Or directly: nexus join ${tunnel.publicUrl}`);
       } catch (e) {
         console.log(

@@ -33,6 +33,12 @@ export async function joinCommand(
 ): Promise<void> {
   const skills = options.skills.split(",").map((s) => s.trim());
   const maxTasks = parseInt(options.maxTasks, 10) || 2;
+  const authToken = process.env.NEXUS_SHARED_TOKEN;
+  if (!authToken) {
+    throw new Error(
+      "NEXUS_SHARED_TOKEN is required. Obtain it from the host over a separate secure channel.",
+    );
+  }
 
   // Resolve invite code to URL if provided
   let resolvedUrl = url;
@@ -55,6 +61,7 @@ export async function joinCommand(
     name: options.name,
     skills,
     nexusUrl: resolvedUrl,
+    authToken,
     port: 0,
     maxConcurrentTasks: maxTasks,
     executionAllowlist: [...DEFAULT_EXECUTION_ALLOWLIST],

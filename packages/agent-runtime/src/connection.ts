@@ -2,6 +2,7 @@ import WebSocket from "ws";
 
 export interface ConnectionConfig {
   readonly url: string;
+  readonly authToken: string;
   readonly reconnectInitialDelayMs: number;
   readonly reconnectMaxDelayMs: number;
   readonly reconnectBackoffMultiplier: number;
@@ -45,7 +46,12 @@ export class Connection {
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.setState("connecting");
-      this.ws = new WebSocket(this.config.url);
+      this.ws = new WebSocket(this.config.url, {
+        headers: {
+          authorization: `Bearer ${this.config.authToken}`,
+        },
+        perMessageDeflate: false,
+      });
 
       this.ws.on("open", () => {
         this.setState("connected");
@@ -107,9 +113,7 @@ export class Connection {
   private attemptReconnect(): void {
     if (this.reconnectAttempts >= this.config.reconnectMaxAttempts) {
       this.setState("disconnected");
-      this.onErrorHandler?.(
-        new Error("Max reconnection attempts exceeded"),
-      );
+      this.onErrorHandler?.(new Error("Max reconnection attempts exceeded"));
       return;
     }
 

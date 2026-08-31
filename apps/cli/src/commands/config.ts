@@ -14,25 +14,19 @@ agent:
 
 nexus:
   port: 7377
-  host: "0.0.0.0"
+  host: "127.0.0.1"
+  sharedTokenEnv: "NEXUS_SHARED_TOKEN"
+  maxPayloadBytes: 65536
   mode: "auto"           # "host" | "join" | "auto"
   joinUrl: ""            # Set when mode is "join"
 
 tunnel:
-  enabled: true
+  enabled: false
   provider: "bore"       # "bore" | "cloudflared" | "none"
   boreServer: "bore.pub"
 
 execution:
-  allowlist:
-    - npm
-    - node
-    - git
-    - python3
-  denylist:
-    - "rm -rf"
-    - sudo
-  timeoutMs: 60000
+  enabled: false
 
 memory:
   dbPath: "./nexus-data/memory.db"
@@ -66,7 +60,9 @@ export async function configCommand(options: ConfigOptions): Promise<void> {
   }
 
   console.log(`\n🔮 Claude Nexus Configuration\n`);
-  console.log(`Use 'nexus config --init' to create an example configuration file.`);
+  console.log(
+    `Use 'nexus config --init' to create an example configuration file.`,
+  );
   console.log(`\nConfiguration can be set via:`);
   console.log(`  1. nexus.yaml in current directory`);
   console.log(`  2. ~/.config/claude-nexus/config.yaml`);

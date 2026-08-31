@@ -19,7 +19,11 @@ import { Heartbeat } from "./heartbeat.js";
 import { ExecutionProxy } from "./execution-proxy.js";
 import { EventEmitter } from "node:events";
 
-export type RuntimeState = "stopped" | "starting" | "connected" | "disconnected";
+export type RuntimeState =
+  | "stopped"
+  | "starting"
+  | "connected"
+  | "disconnected";
 
 const REGISTRATION_TIMEOUT_MS = 10_000;
 
@@ -48,12 +52,19 @@ export class AgentRuntime extends EventEmitter {
     if (!url) {
       throw new Error("No nexus URL provided");
     }
+    const authToken = this.config.authToken ?? process.env.NEXUS_SHARED_TOKEN;
+    if (!authToken) {
+      throw new Error(
+        "No nexus shared token provided. Set NEXUS_SHARED_TOKEN or authToken.",
+      );
+    }
 
     this.state = "starting";
     this.emit("stateChange", this.state);
 
     this.connection = new Connection({
       url,
+      authToken,
       reconnectInitialDelayMs: RECONNECT_INITIAL_DELAY_MS,
       reconnectMaxDelayMs: RECONNECT_MAX_DELAY_MS,
       reconnectBackoffMultiplier: RECONNECT_BACKOFF_MULTIPLIER,
@@ -233,39 +244,17 @@ export class AgentRuntime extends EventEmitter {
   private handleMessage(data: string): void {
     try {
       const message: NexusMessage = JSON.parse(data);
-      this.emit("message", message);
-
-      // Handle execution requests locally
-      if (message.type === "exec.request") {
-        this.handleExecRequest(message);
+      if (
+        message.type === "exec.request" ||
+        message.type === "exec.result" ||
+        message.type === "exec.stream"
+      ) {
+        this.emit("executionRejected", message.id);
+        return;
       }
+      this.emit("message", message);
     } catch (error) {
       this.emit("error", new Error(`Failed to parse message: ${error}`));
     }
-  }
-
-  private async handleExecRequest(message: NexusMessage): Promise<void> {
-    const payload = message.payload as Record<string, unknown>;
-
-    const result = await this.executionProxy.execute(
-      payload.command as string,
-      {
-        requestId: message.id,
-        agentId: this.agentId ?? "",
-        workingDirectory: payload.workingDirectory as string | undefined,
-        env: payload.env as Record<string, string> | undefined,
-        timeoutMs: payload.timeoutMs as number | undefined,
-      },
-    );
-
-    this.sendMessage(
-      "exec.result",
-      "nexus",
-      {
-        ...result,
-        requestingAgentId: payload.requestingAgentId,
-      },
-      message.id,
-    );
   }
 }

@@ -1,4 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
+import { timingSafeEqual } from "node:crypto";
 import type {
   NexusMessage,
   AgentRegisterPayload,
@@ -7,7 +8,6 @@ import type {
   TaskSubmitPayload,
   TaskResultPayload,
   DebateArgumentPayload,
-  ExecRequestPayload,
   PeerMessagePayload,
   NexusErrorPayload,
 } from "@claude-nexus/core";
@@ -17,19 +17,25 @@ import {
   HEARTBEAT_INTERVAL_MS,
 } from "@claude-nexus/core";
 import { generateMessageId } from "@claude-nexus/core";
+import { validateMessage } from "@claude-nexus/protocol";
 import { AgentRegistry } from "./agent-registry.js";
 import { TaskEngine } from "./task-engine.js";
 import { DebateEngine } from "./debate-engine.js";
 import { MemoryStore } from "./memory-store.js";
 import { MessageRouter } from "./message-router.js";
 import { InviteManager } from "./invite.js";
-import { findFreePort } from "./auto-port.js";
 
 export interface NexusServerConfig {
   port: number;
   host: string;
   dbPath?: string;
+  authToken: string;
+  maxPayloadBytes: number;
 }
+
+const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_MAX_PAYLOAD_BYTES = 64 * 1024;
+const MIN_SHARED_TOKEN_BYTES = 32;
 
 export class NexusServer {
   private wss: WebSocketServer | null = null;
@@ -45,12 +51,30 @@ export class NexusServer {
 
   private readonly config: NexusServerConfig;
   private readonly silentAgents = new Set<string>();
+  private readonly socketAgents = new WeakMap<WebSocket, string>();
 
   constructor(config: Partial<NexusServerConfig> = {}) {
+    const authToken = config.authToken ?? process.env.NEXUS_SHARED_TOKEN;
+    if (
+      !authToken ||
+      Buffer.byteLength(authToken, "utf8") < MIN_SHARED_TOKEN_BYTES
+    ) {
+      throw new Error(
+        `A shared token of at least ${MIN_SHARED_TOKEN_BYTES} bytes is required. Set NEXUS_SHARED_TOKEN or pass authToken.`,
+      );
+    }
+
+    const maxPayloadBytes = config.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+    if (!Number.isSafeInteger(maxPayloadBytes) || maxPayloadBytes < 1024) {
+      throw new Error("maxPayloadBytes must be an integer of at least 1024");
+    }
+
     this.config = {
       port: config.port ?? DEFAULT_PORT,
-      host: config.host ?? "0.0.0.0",
+      host: config.host ?? DEFAULT_HOST,
       dbPath: config.dbPath,
+      authToken,
+      maxPayloadBytes,
     };
 
     this.memoryStore = new MemoryStore(this.config.dbPath);
@@ -64,20 +88,29 @@ export class NexusServer {
   }
 
   async start(): Promise<{ port: number; url: string }> {
-    // Auto-find a free port when port is 0
-    const port =
-      this.config.port === 0
-        ? await findFreePort()
-        : this.config.port;
+    // Let the OS allocate an ephemeral port when port is 0. This avoids a
+    // check-then-bind race between concurrent nexus processes.
+    const port = this.config.port;
 
     return new Promise((resolve, reject) => {
       this.wss = new WebSocketServer({
         port,
         host: this.config.host,
+        maxPayload: this.config.maxPayloadBytes,
+        perMessageDeflate: false,
+        verifyClient: (info, done) => {
+          if (this.isAuthorized(info.req.headers.authorization)) {
+            done(true);
+            return;
+          }
+          done(false, 401, "Unauthorized");
+        },
       });
 
       this.wss.on("listening", () => {
-        const url = `ws://${this.config.host}:${this.config.port}`;
+        const addr = this.wss!.address();
+        const actualPort = typeof addr === "object" && addr ? addr.port : port;
+        const url = `ws://${this.config.host}:${actualPort}`;
         console.log(`[Nexus] Server listening on ${url}`);
 
         // Start periodic health checks
@@ -90,10 +123,7 @@ export class NexusServer {
           this.taskEngine.autoAssignQueued();
         }, 5000);
 
-        const addr = this.wss!.address();
-        const actualPort = typeof addr === "object" && addr ? addr.port : this.config.port;
-        const actualUrl = `ws://${this.config.host}:${actualPort}`;
-        resolve({ port: actualPort, url: actualUrl });
+        resolve({ port: actualPort, url });
       });
 
       this.wss.on("error", (error) => {
@@ -120,9 +150,13 @@ export class NexusServer {
     }
 
     // Notify all agents
-    const disconnectMsg = this.createNexusMessage("nexus.migration", "broadcast", {
-      reason: "nexus_shutdown",
-    });
+    const disconnectMsg = this.createNexusMessage(
+      "nexus.migration",
+      "broadcast",
+      {
+        reason: "nexus_shutdown",
+      },
+    );
     this.messageRouter.broadcast(disconnectMsg);
 
     // Close all connections
@@ -141,32 +175,104 @@ export class NexusServer {
   }
 
   private handleConnection(ws: WebSocket): void {
-    let agentId: string | null = null;
-
-    ws.on("message", async (data) => {
+    ws.on("message", async (data, isBinary) => {
       try {
-        const raw = data.toString();
-        const message: NexusMessage = JSON.parse(raw);
+        if (isBinary) {
+          this.rejectSocket(
+            ws,
+            "BINARY_MESSAGES_DISABLED",
+            "Binary WebSocket messages are not accepted.",
+          );
+          return;
+        }
 
-        // Track which agent this socket belongs to
-        if (message.type === "agent.register") {
-          // Registration is handled by the handler
-        } else if (!agentId && message.from) {
-          agentId = message.from;
+        const raw = data.toString();
+        if (Buffer.byteLength(raw, "utf8") > this.config.maxPayloadBytes) {
+          ws.close(1009, "Message too large");
+          return;
+        }
+
+        const parsed: unknown = JSON.parse(raw);
+        const validation = validateMessage(parsed);
+        if (!validation.valid) {
+          this.rejectSocket(
+            ws,
+            "INVALID_MESSAGE",
+            "Message does not match the protocol schema.",
+          );
+          return;
+        }
+
+        const message = validation.data as NexusMessage;
+        const agentId = this.socketAgents.get(ws);
+
+        if (!agentId) {
+          if (
+            message.type !== "agent.register" ||
+            message.from !== "unregistered"
+          ) {
+            this.rejectSocket(
+              ws,
+              "REGISTRATION_REQUIRED",
+              "Register this authenticated connection before using nexus data.",
+              message.id,
+            );
+            return;
+          }
+        } else {
+          if (message.type === "agent.register") {
+            this.rejectSocket(
+              ws,
+              "ALREADY_REGISTERED",
+              "This connection is already registered.",
+              message.id,
+            );
+            return;
+          }
+          if (message.from !== agentId) {
+            this.rejectSocket(
+              ws,
+              "IDENTITY_MISMATCH",
+              "Message identity does not match this connection.",
+              message.id,
+            );
+            return;
+          }
+          if (!this.payloadIdentityMatches(message, agentId)) {
+            this.rejectSocket(
+              ws,
+              "IDENTITY_MISMATCH",
+              "Payload identity does not match this connection.",
+              message.id,
+            );
+            return;
+          }
+        }
+
+        if (message.type === "exec.request" || message.type === "exec.result") {
+          this.sendError(
+            ws,
+            agentId ?? "unregistered",
+            "EXECUTION_DISABLED",
+            "Remote execution is disabled until an OS-level sandbox is available.",
+            message.id,
+          );
+          return;
         }
 
         await this.messageRouter.route(message, ws);
       } catch (error) {
-        console.error("[Nexus] Failed to process message:", error);
-        const errMsg = this.createNexusMessage("nexus.error", agentId || "unknown", {
-          code: "INVALID_MESSAGE",
-          message: error instanceof Error ? error.message : "Unknown error",
-        } satisfies NexusErrorPayload);
-        ws.send(JSON.stringify(errMsg));
+        console.error("[Nexus] Rejected invalid WebSocket message");
+        this.rejectSocket(
+          ws,
+          "INVALID_MESSAGE",
+          "Message must be valid protocol JSON.",
+        );
       }
     });
 
     ws.on("close", (code, _reason) => {
+      const agentId = this.socketAgents.get(ws);
       if (agentId) {
         console.log(`[Nexus] Agent ${agentId} disconnected (${code})`);
         this.handleDisconnect(agentId);
@@ -174,7 +280,8 @@ export class NexusServer {
     });
 
     ws.on("error", (error) => {
-      console.error(`[Nexus] WebSocket error for ${agentId}:`, error);
+      const agentId = this.socketAgents.get(ws) ?? "unregistered";
+      console.error(`[Nexus] WebSocket error for ${agentId}:`, error.message);
     });
   }
 
@@ -182,9 +289,15 @@ export class NexusServer {
     // Agent registration
     this.messageRouter.onMessage("agent.register", (message, ws) => {
       const payload = message.payload as unknown as AgentRegisterPayload;
-      const isSilent = (message.payload as any).silent === true;
+      const isSilent =
+        (
+          message.payload as unknown as AgentRegisterPayload & {
+            silent?: boolean;
+          }
+        ).silent === true;
       const record = this.agentRegistry.register(payload);
       const agentId = record.agentId;
+      this.socketAgents.set(ws, agentId);
 
       // Track silent flag on the agent record for disconnect handling
       if (isSilent) {
@@ -200,7 +313,10 @@ export class NexusServer {
           agentId,
           nexusVersion: NEXUS_VERSION,
           connectedAgents: this.agentRegistry.getSummaries(),
-          memorySnapshot: this.memoryStore.getSnapshot() as unknown as Record<string, unknown>,
+          memorySnapshot: this.memoryStore.getSnapshot() as unknown as Record<
+            string,
+            unknown
+          >,
         } satisfies AgentRegisteredPayload,
         message.id,
       );
@@ -209,10 +325,14 @@ export class NexusServer {
 
       // Only broadcast join notification for non-silent agents
       if (!isSilent) {
-        const notification = this.createNexusMessage("peer.message", "broadcast", {
-          content: `Agent "${record.name}" has joined the nexus.`,
-          messageType: "chat",
-        } satisfies PeerMessagePayload);
+        const notification = this.createNexusMessage(
+          "peer.message",
+          "broadcast",
+          {
+            content: `Agent "${record.name}" has joined the nexus.`,
+            messageType: "chat",
+          } satisfies PeerMessagePayload,
+        );
         this.messageRouter.broadcast(notification, agentId);
       }
 
@@ -250,10 +370,15 @@ export class NexusServer {
       const payload = message.payload as unknown as TaskSubmitPayload;
 
       if (this.taskEngine.isDuplicate(payload as any)) {
-        const errMsg = this.createNexusMessage("nexus.error", message.from, {
-          code: "DUPLICATE_TASK",
-          message: "A similar task is already in the queue.",
-        } satisfies NexusErrorPayload, message.id);
+        const errMsg = this.createNexusMessage(
+          "nexus.error",
+          message.from,
+          {
+            code: "DUPLICATE_TASK",
+            message: "A similar task is already in the queue.",
+          } satisfies NexusErrorPayload,
+          message.id,
+        );
         this.messageRouter.sendTo(message.from, errMsg);
         return;
       }
@@ -281,7 +406,9 @@ export class NexusServer {
       this.messageRouter.sendTo(message.from, response);
 
       // Try auto-assignment
-      const bestAgent = this.agentRegistry.findBestForSkills([...task.skillsRequired]);
+      const bestAgent = this.agentRegistry.findBestForSkills([
+        ...task.skillsRequired,
+      ]);
       if (bestAgent) {
         const assigned = this.taskEngine.assign(
           task.taskId,
@@ -312,7 +439,12 @@ export class NexusServer {
         const response = this.createNexusMessage(
           "task.assigned",
           message.from,
-          { taskId: task.taskId, task, assignedBy: message.from, reason: "Self-claimed" },
+          {
+            taskId: task.taskId,
+            task,
+            assignedBy: message.from,
+            reason: "Self-claimed",
+          },
           message.id,
         );
         this.messageRouter.sendTo(message.from, response);
@@ -433,7 +565,12 @@ export class NexusServer {
 
     // Memory write
     this.messageRouter.onMessage("memory.write", (message) => {
-      const payload = message.payload as { key: string; value: unknown; scope: any; ttl?: number };
+      const payload = message.payload as {
+        key: string;
+        value: unknown;
+        scope: any;
+        ttl?: number;
+      };
       const entry = this.memoryStore.write(
         payload.key,
         payload.value,
@@ -454,7 +591,10 @@ export class NexusServer {
     // Memory read
     this.messageRouter.onMessage("memory.read", (message) => {
       const payload = message.payload as { key: string; scope: any };
-      const entry = this.memoryStore.read(payload.key, payload.scope || "shared");
+      const entry = this.memoryStore.read(
+        payload.key,
+        payload.scope || "shared",
+      );
 
       const response = this.createNexusMessage(
         "memory.read_result",
@@ -465,32 +605,6 @@ export class NexusServer {
       this.messageRouter.sendTo(message.from, response);
     });
 
-    // Remote execution request — forward to target agent
-    this.messageRouter.onMessage("exec.request", (message) => {
-      const payload = message.payload as unknown as ExecRequestPayload;
-      const forwardMsg = this.createNexusMessage(
-        "exec.request",
-        payload.targetAgentId,
-        { ...payload, requestingAgentId: message.from },
-        message.id,
-      );
-      this.messageRouter.sendTo(payload.targetAgentId, forwardMsg);
-    });
-
-    // Remote execution result — forward back to requester
-    this.messageRouter.onMessage("exec.result", (message) => {
-      const payload = message.payload as any;
-      if (payload.requestingAgentId) {
-        const resultMsg = this.createNexusMessage(
-          "exec.result",
-          payload.requestingAgentId,
-          payload,
-          message.correlationId,
-        );
-        this.messageRouter.sendTo(payload.requestingAgentId, resultMsg);
-      }
-    });
-
     // Peer message — forward to target or broadcast
     this.messageRouter.onMessage("peer.message", (message) => {
       // Handle special query messages from MCP tools
@@ -498,10 +612,19 @@ export class NexusServer {
       if (payload.content === "__nexus_query_status") {
         const status = this.getStatus();
         const agents = this.agentRegistry.getSummaries();
-        const response = this.createNexusMessage("peer.message", message.from, {
-          content: JSON.stringify({ type: "status_response", status, agents }),
-          messageType: "context_share",
-        }, message.id);
+        const response = this.createNexusMessage(
+          "peer.message",
+          message.from,
+          {
+            content: JSON.stringify({
+              type: "status_response",
+              status,
+              agents,
+            }),
+            messageType: "context_share",
+          },
+          message.id,
+        );
         this.messageRouter.sendTo(message.from, response);
         return;
       }
@@ -515,7 +638,7 @@ export class NexusServer {
         } else {
           tasks = this.taskEngine.getAll();
         }
-        const taskSummaries = tasks.map(t => ({
+        const taskSummaries = tasks.map((t) => ({
           taskId: t.taskId,
           title: t.title,
           status: t.status,
@@ -523,10 +646,18 @@ export class NexusServer {
           assignedAgentId: t.assignedAgentId,
           skillsRequired: t.skillsRequired,
         }));
-        const response = this.createNexusMessage("peer.message", message.from, {
-          content: JSON.stringify({ type: "tasks_response", tasks: taskSummaries }),
-          messageType: "context_share",
-        }, message.id);
+        const response = this.createNexusMessage(
+          "peer.message",
+          message.from,
+          {
+            content: JSON.stringify({
+              type: "tasks_response",
+              tasks: taskSummaries,
+            }),
+            messageType: "context_share",
+          },
+          message.id,
+        );
         this.messageRouter.sendTo(message.from, response);
         return;
       }
@@ -536,15 +667,20 @@ export class NexusServer {
         for (const msg of messages) {
           this.memoryStore.markMessageRead(msg.messageId, message.from);
         }
-        const response = this.createNexusMessage("peer.message", message.from, {
-          content: JSON.stringify({ type: "inbox_response", messages }),
-          messageType: "context_share",
-        }, message.id);
+        const response = this.createNexusMessage(
+          "peer.message",
+          message.from,
+          {
+            content: JSON.stringify({ type: "inbox_response", messages }),
+            messageType: "context_share",
+          },
+          message.id,
+        );
         this.messageRouter.sendTo(message.from, response);
         return;
       }
       if (payload.content === "__nexus_query_agents") {
-        const agents = this.agentRegistry.getAll().map(a => ({
+        const agents = this.agentRegistry.getAll().map((a) => ({
           agentId: a.agentId,
           name: a.name,
           status: a.status,
@@ -552,15 +688,23 @@ export class NexusServer {
           activeTasks: a.activeTasks.length,
           platform: a.platform,
         }));
-        const response = this.createNexusMessage("peer.message", message.from, {
-          content: JSON.stringify({ type: "agents_response", agents }),
-          messageType: "context_share",
-        }, message.id);
+        const response = this.createNexusMessage(
+          "peer.message",
+          message.from,
+          {
+            content: JSON.stringify({ type: "agents_response", agents }),
+            messageType: "context_share",
+          },
+          message.id,
+        );
         this.messageRouter.sendTo(message.from, response);
         return;
       }
       // Persist message for offline delivery
-      if (payload.messageType !== "context_share" || !payload.content?.startsWith("__nexus_query")) {
+      if (
+        payload.messageType !== "context_share" ||
+        !payload.content?.startsWith("__nexus_query")
+      ) {
         this.memoryStore.saveMessage(
           message.id,
           message.from,
@@ -579,9 +723,15 @@ export class NexusServer {
     });
   }
 
-  private handleDisconnect(agentId: string): void {
+  private handleDisconnect(
+    agentId: string,
+    closeCode = 1000,
+    closeReason = "Agent disconnected",
+  ): void {
+    const socket = this.messageRouter.getSocket(agentId);
     const agent = this.agentRegistry.deregister(agentId);
     this.messageRouter.unregisterSocket(agentId);
+    if (socket) this.socketAgents.delete(socket);
     const wasSilent = this.silentAgents.delete(agentId);
 
     if (agent) {
@@ -596,13 +746,80 @@ export class NexusServer {
         const content = hadTasks
           ? `Agent "${agent.name}" has left the nexus. ${agent.activeTasks.length} task(s) reassigned.`
           : `Agent "${agent.name}" has left the nexus.`;
-        const notification = this.createNexusMessage("peer.message", "broadcast", {
-          content,
-          messageType: "chat",
-        } satisfies PeerMessagePayload);
+        const notification = this.createNexusMessage(
+          "peer.message",
+          "broadcast",
+          {
+            content,
+            messageType: "chat",
+          } satisfies PeerMessagePayload,
+        );
         this.messageRouter.broadcast(notification);
       }
     }
+
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.close(closeCode, closeReason);
+    }
+  }
+
+  private isAuthorized(header: string | undefined): boolean {
+    if (!header?.startsWith("Bearer ")) return false;
+    const supplied = Buffer.from(header.slice("Bearer ".length), "utf8");
+    const expected = Buffer.from(this.config.authToken, "utf8");
+    return (
+      supplied.length === expected.length && timingSafeEqual(supplied, expected)
+    );
+  }
+
+  private payloadIdentityMatches(
+    message: NexusMessage,
+    agentId: string,
+  ): boolean {
+    if (
+      message.type !== "agent.heartbeat" &&
+      message.type !== "agent.deregister"
+    ) {
+      return true;
+    }
+    const payload = message.payload as { agentId?: unknown };
+    return payload.agentId === agentId;
+  }
+
+  private rejectSocket(
+    ws: WebSocket,
+    code: string,
+    message: string,
+    correlationId?: string,
+  ): void {
+    const agentId = this.socketAgents.get(ws) ?? "unregistered";
+    this.sendError(ws, agentId, code, message, correlationId, () => {
+      ws.close(1008, "Policy violation");
+    });
+  }
+
+  private sendError(
+    ws: WebSocket,
+    to: string,
+    code: string,
+    message: string,
+    correlationId?: string,
+    afterSend?: () => void,
+  ): void {
+    if (ws.readyState !== WebSocket.OPEN) {
+      afterSend?.();
+      return;
+    }
+    const error = this.createNexusMessage(
+      "nexus.error",
+      to,
+      { code, message } satisfies NexusErrorPayload,
+      correlationId,
+    );
+    ws.send(JSON.stringify(error), (sendError) => {
+      if (sendError) ws.terminate();
+      else afterSend?.();
+    });
   }
 
   private runHealthCheck(): void {
@@ -610,15 +827,13 @@ export class NexusServer {
 
     for (const agentId of health.disconnected) {
       console.log(`[Nexus] Agent ${agentId} timed out — disconnecting`);
-      this.handleDisconnect(agentId);
+      this.handleDisconnect(agentId, 1008, "Heartbeat timeout");
     }
 
     // Handle stale tasks
     const staleTasks = this.taskEngine.detectStaleTasks();
     for (const task of staleTasks) {
-      console.log(
-        `[Nexus] Task ${task.taskId} is stale — reassigning`,
-      );
+      console.log(`[Nexus] Task ${task.taskId} is stale — reassigning`);
       this.taskEngine.reassign(task.taskId, "Stale task timeout");
     }
 
@@ -663,7 +878,12 @@ export class NexusServer {
   getStatus(): {
     version: string;
     agents: number;
-    tasks: { total: number; queued: number; inProgress: number; completed: number };
+    tasks: {
+      total: number;
+      queued: number;
+      inProgress: number;
+      completed: number;
+    };
     debates: { active: number };
     memory: { version: number };
   } {

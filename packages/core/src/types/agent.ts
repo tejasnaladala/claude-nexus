@@ -60,6 +60,7 @@ export interface AgentConfig {
   readonly name: string;
   readonly skills: readonly string[];
   readonly nexusUrl?: string;
+  readonly authToken?: string;
   readonly port: number;
   readonly tunnelProvider?: "bore" | "cloudflared" | "none";
   readonly maxConcurrentTasks: number;
