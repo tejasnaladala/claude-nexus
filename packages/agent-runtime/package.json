@@ -20,7 +20,7 @@
   "dependencies": {
     "@claude-nexus/core": "*",
     "@claude-nexus/protocol": "*",
-    "ws": "^8.18.0"
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

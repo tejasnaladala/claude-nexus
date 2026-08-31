@@ -9,7 +9,10 @@ import {
 import type { AgentRuntime } from "@claude-nexus/agent-runtime";
 import * as tools from "./tools/index.js";
 import { MessageInbox } from "./inbox.js";
-import { getNotificationBanner, COLLABORATION_PROMPT } from "./notifications.js";
+import {
+  getNotificationBanner,
+  COLLABORATION_PROMPT,
+} from "./notifications.js";
 
 export function createNexusMcpServer(runtime: AgentRuntime) {
   const server = new Server(
@@ -32,7 +35,6 @@ export function createNexusMcpServer(runtime: AgentRuntime) {
     tools.createReadMemoryTool(runtime),
     tools.createWriteMemoryTool(runtime),
     tools.createRequestDebateTool(runtime),
-    tools.createExecuteRemoteTool(runtime),
     tools.createReadInboxTool(inbox, runtime),
   ];
 
@@ -52,7 +54,9 @@ export function createNexusMcpServer(runtime: AgentRuntime) {
     const tool = toolMap.get(request.params.name);
     if (!tool) {
       return {
-        content: [{ type: "text", text: `Unknown tool: ${request.params.name}` }],
+        content: [
+          { type: "text", text: `Unknown tool: ${request.params.name}` },
+        ],
         isError: true,
       };
     }
@@ -74,7 +78,12 @@ export function createNexusMcpServer(runtime: AgentRuntime) {
       return result;
     } catch (error) {
       return {
-        content: [{ type: "text", text: `Tool error: ${error instanceof Error ? error.message : String(error)}` }],
+        content: [
+          {
+            type: "text",
+            text: `Tool error: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ],
         isError: true,
       };
     }

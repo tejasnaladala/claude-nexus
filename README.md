@@ -10,13 +10,13 @@ and we kept hitting the same wall: our agents had no way to talk to each other.
 We were copy-pasting context between two terminals by hand. Claude Nexus is the
 thing that fixes that. One person starts a nexus, the other joins with an invite
 code, and from then on both agents share a task queue, a memory store, and a
-message channel. It works across a LAN or over the open internet through an
-auto-provisioned tunnel.
+message channel. The server is loopback-only by default; LAN or tunnel access
+must be enabled explicitly and every peer must present the shared token.
 
 It is real, dogfooded code: two people used it to coordinate Claude Code on a
 shared project, and the bugs that surfaced during that run are written up in
 [`docs/adr/005-post-mortem-fixes.md`](docs/adr/005-post-mortem-fixes.md). About
-5.9K lines of TypeScript across six packages, 32 tests.
+5.9K lines of TypeScript across six packages, 41 tests.
 
 ## Quick start
 
@@ -30,6 +30,10 @@ npm run build
 ### Machine 1 — start the nexus
 
 ```bash
+# Generate a high-entropy value once, then give it to peers through a
+# separate secure channel. Never put it in an invite URL or commit it.
+export NEXUS_SHARED_TOKEN="<at-least-32-byte-random-token>"
+
 # Start the coordination server and register as an agent
 node apps/cli/dist/index.js start --name "alice" --skills "typescript,react"
 
@@ -44,11 +48,15 @@ node apps/cli/dist/index.js setup --nexus-url ws://localhost:7377 --name "alice"
 Same network:
 
 ```bash
+export NEXUS_SHARED_TOKEN="<token-received-from-alice>"
+
+# Alice must opt into LAN binding with: --host 0.0.0.0
+node apps/cli/dist/index.js join ws://ALICE_IP:7377 --name "bob" --skills "python,devops"
 node apps/cli/dist/index.js setup --nexus-url ws://ALICE_IP:7377 --name "bob" --skills "python,devops"
 ```
 
-Different network (Alice's terminal prints an invite code; the tunnel is
-auto-provisioned):
+Different network (Alice explicitly starts with `--tunnel`; the token is still
+shared separately from the invite code):
 
 ```bash
 node apps/cli/dist/index.js join --invite INVITE_CODE --name "bob" --skills "python,devops"
@@ -57,22 +65,21 @@ node apps/cli/dist/index.js setup --nexus-url wss://TUNNEL_URL --name "bob" --sk
 
 ### Use it from Claude Code
 
-After `setup` and a restart, Claude Code has 12 nexus tools:
+After `setup` and a restart, Claude Code has 11 nexus tools:
 
-| Tool | Purpose |
-|------|---------|
-| `nexus_status` | Check connection and see online agents |
-| `nexus_submit_task` | Submit work for the team |
-| `nexus_claim_task` | Claim an available task |
-| `nexus_submit_result` | Submit completed work |
-| `nexus_get_task_queue` | View all tasks and status |
-| `nexus_send_message` | Send a message to another agent |
-| `nexus_list_agents` | List connected agents |
-| `nexus_read_memory` | Read from shared memory |
-| `nexus_write_memory` | Write to shared memory |
-| `nexus_request_debate` | Start an adversarial review |
-| `nexus_execute_remote` | Run a command on another machine |
-| `nexus_read_inbox` | Read messages from other agents |
+| Tool                   | Purpose                                |
+| ---------------------- | -------------------------------------- |
+| `nexus_status`         | Check connection and see online agents |
+| `nexus_submit_task`    | Submit work for the team               |
+| `nexus_claim_task`     | Claim an available task                |
+| `nexus_submit_result`  | Submit completed work                  |
+| `nexus_get_task_queue` | View all tasks and status              |
+| `nexus_send_message`   | Send a message to another agent        |
+| `nexus_list_agents`    | List connected agents                  |
+| `nexus_read_memory`    | Read from shared memory                |
+| `nexus_write_memory`   | Write to shared memory                 |
+| `nexus_request_debate` | Start an adversarial review            |
+| `nexus_read_inbox`     | Read messages from other agents        |
 
 ## How it works
 
@@ -102,9 +109,9 @@ Claude Code <--MCP--> MCP Server <--+
 
 - **Nexus server** — the WebSocket hub. Holds the agent registry, task engine,
   debate engine, message router, and a SQLite-backed shared memory store.
-- **Agent runtime** — the per-machine daemon: WebSocket client, heartbeat,
-  reconnection with backoff, execution proxy, and tunnel manager.
-- **MCP server** — exposes the nexus to Claude Code as 12 tools, with an inbox
+- **Agent runtime** — the per-machine daemon: authenticated WebSocket client,
+  heartbeat, reconnection with backoff, and tunnel manager.
+- **MCP server** — exposes the nexus to Claude Code as 11 tools, with an inbox
   so peer messages survive between tool calls.
 - **CLI** — `start`, `join`, `setup`, `uninstall`, `status`, `config`, `mcp`.
 
@@ -120,10 +127,11 @@ A few things are easy to oversell, so to be precise:
   with skill-based auto-assignment, explicit `claim()`, and stale-task
   detection. It is pull-claim plus push-assign, not a classic work-stealing
   scheduler.
-- **Remote execution** runs through an allowlist + denylist and rejects shell
-  metacharacters so an allowlisted prefix can't chain in another command. It
-  still runs under a shell, so it is a guardrail for trusted peers, not a hard
-  sandbox. Run the nexus only among people you trust.
+- **Remote execution is disabled.** The coordinator rejects execution requests
+  and results, the agent runtime drops execution messages, and the MCP surface
+  does not advertise an execution tool. It must remain disabled until commands
+  run in a disposable, unprivileged, no-network OS sandbox with no host secrets
+  or writable host mounts and strict resource limits.
 
 ### Other features
 
@@ -133,8 +141,9 @@ A few things are easy to oversell, so to be precise:
 - **Silent agents** — utility connections don't spam join/leave notifications.
 - **Message persistence** — messages are stored in SQLite and survive
   reconnects.
-- **Auto-tunnel** — internet connectivity via localtunnel, no config.
-- **Invite links** — share access with a single code.
+- **Explicit tunnel mode** — internet connectivity is opt-in with `--tunnel`.
+- **Invite links** — share the endpoint only; authentication tokens travel
+  through a separate secure channel.
 
 ## Project structure
 
@@ -144,8 +153,8 @@ claude-nexus/
     core/           # Shared types, utilities, constants
     protocol/       # Zod schemas, serialization, validation
     nexus-server/   # WebSocket server, task engine, debate, memory
-    agent-runtime/  # Connection, heartbeat, execution proxy, tunnel
-    mcp-server/     # 12 MCP tools for Claude Code
+    agent-runtime/  # Authenticated connection, heartbeat, tunnel
+    mcp-server/     # 11 MCP tools for Claude Code
   apps/
     cli/            # CLI entry point with all commands
   tests/
@@ -179,15 +188,16 @@ agent:
 
 nexus:
   port: 7377
-  host: "0.0.0.0"
+  host: "127.0.0.1"
+  sharedTokenEnv: "NEXUS_SHARED_TOKEN"
+  maxPayloadBytes: 65536
 
 tunnel:
-  enabled: true
+  enabled: false
   provider: "localtunnel"
 
 execution:
-  allowlist: [npm, node, git, python3]
-  timeoutMs: 60000
+  enabled: false
 ```
 
 ## Development
@@ -200,11 +210,12 @@ npm test             # Run all tests
 
 ### Tests
 
-32 tests cover the agent registry (registration, skill matching, health checks),
+41 tests cover the agent registry (registration, skill matching, health checks),
 the memory store (CRUD, TTL, snapshots, version-based conflict resolution), the
 task lifecycle (submit, assign, complete across two agents), and the execution
-proxy's allowlist (including the metacharacter checks that stop command
-chaining).
+proxy's local allowlist. Adversarial integration tests cover authentication,
+pre-registration access, identity spoofing, strict schemas, payload limits, and
+the remote-execution kill switch.
 
 ```bash
 npx vitest run                    # All tests

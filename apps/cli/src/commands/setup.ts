@@ -48,7 +48,13 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   }
 
   // Find the nexus CLI path
-  const nexusCliPath = join(process.cwd(), "apps", "cli", "dist", "index.js").replace(/\\/g, "/");
+  const nexusCliPath = join(
+    process.cwd(),
+    "apps",
+    "cli",
+    "dist",
+    "index.js",
+  ).replace(/\\/g, "/");
 
   // Build args
   const args = [nexusCliPath, "mcp"];
@@ -74,10 +80,14 @@ export async function setupCommand(options: SetupOptions): Promise<void> {
   if (options.nexusUrl) {
     console.log(`   Nexus URL: ${options.nexusUrl}`);
   } else {
-    console.log("   Nexus URL: not set (set NEXUS_URL env var or pass --nexus-url)");
+    console.log(
+      "   Nexus URL: not set (set NEXUS_URL env var or pass --nexus-url)",
+    );
   }
   console.log("\nNext steps:");
   console.log("   1. Restart Claude Code to load the MCP server");
-  console.log("   2. In Claude Code, say: 'Use nexus_status to check connection'");
-  console.log("   3. Your Claude Code now has 12 nexus tools available!\n");
+  console.log(
+    "   2. In Claude Code, say: 'Use nexus_status to check connection'",
+  );
+  console.log("   3. Your Claude Code now has 11 nexus tools available!\n");
 }

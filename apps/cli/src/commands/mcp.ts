@@ -11,12 +11,14 @@ interface McpOptions {
 export async function mcpCommand(options: McpOptions): Promise<void> {
   const skills = options.skills.split(",").map((s) => s.trim());
   const nexusUrl = options.nexusUrl || process.env.NEXUS_URL;
+  const authToken = process.env.NEXUS_SHARED_TOKEN;
 
   // Create agent runtime
   const runtime = new AgentRuntime({
     name: options.name,
     skills,
     nexusUrl,
+    authToken,
     port: 0,
     maxConcurrentTasks: 2,
     executionAllowlist: [...DEFAULT_EXECUTION_ALLOWLIST],
@@ -27,9 +29,7 @@ export async function mcpCommand(options: McpOptions): Promise<void> {
     try {
       await runtime.start(nexusUrl);
       // Log to stderr so it doesn't interfere with MCP stdio
-      process.stderr.write(
-        `[nexus-mcp] Connected to nexus at ${nexusUrl}\n`,
-      );
+      process.stderr.write(`[nexus-mcp] Connected to nexus at ${nexusUrl}\n`);
     } catch (error) {
       process.stderr.write(
         `[nexus-mcp] Warning: Could not connect to nexus at ${nexusUrl}: ${error instanceof Error ? error.message : error}\n`,

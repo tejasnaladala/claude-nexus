@@ -22,10 +22,14 @@ program
   .option("-n, --name <name>", "Agent name", "agent")
   .option("-s, --skills <skills>", "Comma-separated skills", "general")
   .option("-p, --port <port>", "Nexus server port", "7377")
-  .option("--host <host>", "Bind host", "0.0.0.0")
+  .option("--host <host>", "Bind host", "127.0.0.1")
   .option("--max-tasks <n>", "Max concurrent tasks", "2")
   .option("--db-path <path>", "SQLite database path")
-  .option("--no-tunnel", "Disable automatic tunnel")
+  .option(
+    "--tunnel",
+    "Explicitly expose the authenticated server through a tunnel",
+    false,
+  )
   .action(startCommand);
 
 program

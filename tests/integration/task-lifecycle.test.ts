@@ -5,6 +5,7 @@ import { DEFAULT_EXECUTION_ALLOWLIST } from "@claude-nexus/core";
 import type { NexusMessage } from "@claude-nexus/core";
 
 describe("Task Lifecycle Integration", () => {
+  const authToken = "task-lifecycle-test-token-32-bytes";
   let server: NexusServer;
   let agent1: AgentRuntime;
   let agent2: AgentRuntime;
@@ -12,7 +13,11 @@ describe("Task Lifecycle Integration", () => {
 
   beforeAll(async () => {
     // Start nexus server on random port
-    server = new NexusServer({ port: 0, host: "127.0.0.1" });
+    server = new NexusServer({
+      port: 0,
+      host: "127.0.0.1",
+      authToken,
+    });
     const { port } = await server.start();
     serverPort = port;
 
@@ -20,6 +25,7 @@ describe("Task Lifecycle Integration", () => {
       port: 0,
       maxConcurrentTasks: 2,
       executionAllowlist: [...DEFAULT_EXECUTION_ALLOWLIST],
+      authToken,
     };
 
     agent1 = new AgentRuntime({
